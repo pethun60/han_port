@@ -58,6 +58,8 @@ OBIS_KEY_MAP = {
     '1-0:31.7.0': 'L1ampere',
     '1-0:51.7.0': 'L2ampere',
     '1-0:71.7.0': 'L3ampere',
+    '1-0:3.7.0':  'reactive_power_import',
+    '1-0:4.7.0':  'reactive_power_export',
 }
 
 _OBIS_LINE_RE = re.compile(rb'^([0-9]+-[0-9]+:[0-9]+\.[0-9]+\.[0-9]+)\(([^)]*)\)')
@@ -114,8 +116,11 @@ DEVICE_INFO = {
 
 # Maps our internal data keys -> (object_id, HA display name, unit, device_class, state_class)
 # The first 6 entries keep their original object_id/name so existing Home
-# Assistant entities and history aren't disturbed; the rest are newly added
-# to cover every OBIS code documented in docs/HAN_port_protocol_reference.md.
+# Assistant entities and history aren't disturbed. Most of the rest cover
+# every OBIS code documented in docs/HAN_port_protocol_reference.md; the
+# reactive_power_import/export entries (1-0:3.7.0 / 1-0:4.7.0) aren't in
+# that doc but were confirmed present in the meter's actual raw telegrams
+# (lora.log on rpizero4).
 SENSOR_DEFS = {
     'datevalue':               ('date_time',         'Date/Time',                None,    None,      None),
     'active_energy_import':    ('aktiv_energi',      'Aktiv energi mätare',       'kWh',   'energy',  'total_increasing'),
@@ -134,6 +139,8 @@ SENSOR_DEFS = {
     'L1voltage':               ('fasspanning_l1',     'Fasspänning L1',           'V',     'voltage', 'measurement'),
     'L2voltage':               ('fasspanning_l2',     'Fasspänning L2',           'V',     'voltage', 'measurement'),
     'L3voltage':               ('fasspanning_l3',     'Fasspänning L3',           'V',     'voltage', 'measurement'),
+    'reactive_power_import':   ('reaktiv_effekt',     'Reaktiv effekt',           'kVAr',  None,      'measurement'),
+    'reactive_power_export':   ('reaktiv_effekt_ut',  'Reaktiv effekt, inmatning','kVAr',  None,      'measurement'),
 }
 
 
