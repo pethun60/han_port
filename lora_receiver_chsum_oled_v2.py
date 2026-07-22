@@ -4,6 +4,7 @@ import paho.mqtt.client as mqtt
 import logging
 import time
 import io
+import re
 import board
 import busio
 import adafruit_ssd1306
@@ -36,30 +37,52 @@ def extract_frame(buf: bytes):
     return payload, expected, buf[end+5:]
 
 
+# OBIS code (A-B:C.D.E) -> internal result key. See
+# docs/HAN_port_protocol_reference.md for what each code means. Matching by
+# OBIS code (rather than fixed line position, as this used to do) means every
+# documented value gets picked up regardless of line order/count.
+OBIS_KEY_MAP = {
+    '0-0:1.0.0':  'datevalue',
+    '1-0:1.8.0':  'active_energy_import',
+    '1-0:2.8.0':  'active_energy_export',
+    '1-0:3.8.0':  'reactive_energy_import',
+    '1-0:4.8.0':  'reactive_energy_export',
+    '1-0:1.7.0':  'active_power_import',
+    '1-0:2.7.0':  'active_power_export',
+    '1-0:21.7.0': 'L1active_power',
+    '1-0:41.7.0': 'L2active_power',
+    '1-0:61.7.0': 'L3active_power',
+    '1-0:32.7.0': 'L1voltage',
+    '1-0:52.7.0': 'L2voltage',
+    '1-0:72.7.0': 'L3voltage',
+    '1-0:31.7.0': 'L1ampere',
+    '1-0:51.7.0': 'L2ampere',
+    '1-0:71.7.0': 'L3ampere',
+}
+
+_OBIS_LINE_RE = re.compile(rb'^([0-9]+-[0-9]+:[0-9]+\.[0-9]+\.[0-9]+)\(([^)]*)\)')
+
+
 def process_payload(payload_bytes, read_lines):
     result = {}
     try:
         payload_stream = io.BytesIO(payload_bytes)
-        for i in range(read_lines):
-            elec_data = payload_stream.readline().strip()
-            pos_start = elec_data.find(b'(') + 1
-            pos_end = elec_data.find(b'*')
-            if pos_end == -1: pos_end = elec_data.find(b'W')
-            pos_type = elec_data.find(b')')
-            if pos_start <= 0 or pos_end == -1: continue
-            value = elec_data[pos_start:pos_end].decode('utf-8')
-            if i == 2: result['datevalue'] = elec_data[10:22].decode('utf-8')
-            elif i == 3: result['active_energy_out'] = value
-            elif i == 4: result['active_energy_in'] = value
-            elif i == 5: result['reactive_energy_out'] = value
-            elif i == 7: result['active_energy_out_curr'] = value
-            elif i == 23: result['L1voltage'] = value
-            elif i == 24: result['L2voltage'] = value
-            elif i == 25: result['L3voltage'] = value
-            elif i == 26: result['L1ampere'] = value
-            elif i == 27: result['L2ampere'] = value
-            elif i == 28: result['L3ampere'] = value
-            else: result[f'value_{i}'] = value
+        for _ in range(read_lines):
+            line = payload_stream.readline().strip()
+            if not line:
+                continue
+            m = _OBIS_LINE_RE.match(line)
+            if not m:
+                continue
+            obis_code = m.group(1).decode('ascii')
+            key = OBIS_KEY_MAP.get(obis_code)
+            if key is None:
+                continue
+            value = m.group(2).decode('utf-8').split('*', 1)[0]
+            if obis_code == '0-0:1.0.0':
+                # strip the trailing summer/winter-time flag (S/W), keep YYMMDDhhmmss
+                value = value.rstrip('SW')
+            result[key] = value
         return result
     except Exception as e:
         print('Error while processing payload:', e)
@@ -90,13 +113,27 @@ DEVICE_INFO = {
 }
 
 # Maps our internal data keys -> (object_id, HA display name, unit, device_class, state_class)
+# The first 6 entries keep their original object_id/name so existing Home
+# Assistant entities and history aren't disturbed; the rest are newly added
+# to cover every OBIS code documented in docs/HAN_port_protocol_reference.md.
 SENSOR_DEFS = {
-    'datevalue':               ('date_time',        'Date/Time',            None,   None,      None),
-    'active_energy_out':       ('aktiv_energi',      'Aktiv energi mätare',  'kWh',  'energy',  'total_increasing'),
-    'active_energy_out_curr':  ('aktiv_effekt',      'Active power',         'kW',   'power',   'measurement'),
-    'L1ampere':                ('fasstrom_l1',       'Strömförbrukning L1',  'A',    None,      'measurement'),
-    'L2ampere':                ('fasstrom_l2',       'Strömförbrukning L2',  'A',    None,      'measurement'),
-    'L3ampere':                ('fasstrom_l3',       'Strömförbrukning L3',  'A',    None,      'measurement'),
+    'datevalue':               ('date_time',         'Date/Time',                None,    None,      None),
+    'active_energy_import':    ('aktiv_energi',      'Aktiv energi mätare',       'kWh',   'energy',  'total_increasing'),
+    'active_power_import':     ('aktiv_effekt',      'Active power',              'kW',    'power',   'measurement'),
+    'L1ampere':                ('fasstrom_l1',        'Strömförbrukning L1',      'A',     None,      'measurement'),
+    'L2ampere':                ('fasstrom_l2',        'Strömförbrukning L2',      'A',     None,      'measurement'),
+    'L3ampere':                ('fasstrom_l3',        'Strömförbrukning L3',      'A',     None,      'measurement'),
+
+    'active_energy_export':    ('aktiv_energi_ut',    'Aktiv energi, inmatning',  'kWh',   'energy',  'total_increasing'),
+    'reactive_energy_import':  ('reaktiv_energi',     'Reaktiv energi mätare',    'kvarh', None,      'total_increasing'),
+    'reactive_energy_export':  ('reaktiv_energi_ut',  'Reaktiv energi, inmatning','kvarh', None,      'total_increasing'),
+    'active_power_export':     ('aktiv_effekt_ut',    'Active power, inmatning',  'kW',    'power',   'measurement'),
+    'L1active_power':          ('aktiv_effekt_l1',    'Active power L1',          'kW',    'power',   'measurement'),
+    'L2active_power':          ('aktiv_effekt_l2',    'Active power L2',          'kW',    'power',   'measurement'),
+    'L3active_power':          ('aktiv_effekt_l3',    'Active power L3',          'kW',    'power',   'measurement'),
+    'L1voltage':               ('fasspanning_l1',     'Fasspänning L1',           'V',     'voltage', 'measurement'),
+    'L2voltage':               ('fasspanning_l2',     'Fasspänning L2',           'V',     'voltage', 'measurement'),
+    'L3voltage':               ('fasspanning_l3',     'Fasspänning L3',           'V',     'voltage', 'measurement'),
 }
 
 
