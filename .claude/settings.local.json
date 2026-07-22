@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ping *)",
+      "Bash(ssh *)",
+      "WebSearch",
+      "Bash(avahi-resolve -a 192.168.10.18)",
+      "Bash(getent hosts *)",
+      "Bash(ip neigh *)",
+      "Read(//home/peter/.ssh/**)",
+      "Read(//etc/**)"
+    ]
+  }
+}
